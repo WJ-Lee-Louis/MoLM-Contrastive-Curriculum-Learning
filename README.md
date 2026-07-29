@@ -1,238 +1,412 @@
-# Vision Language Model is NOT All You Need: Augmentation Strategies for Molecule Language Model
-
-<p align="center">   
-    <a href="https://pytorch.org/" alt="PyTorch">
-      <img src="https://img.shields.io/badge/PyTorch-%23EE4C2C.svg?e&logo=PyTorch&logoColor=white" /></a>
-    <a href="https://cikm2024.org/" alt="Conference">
-        <img src="https://img.shields.io/badge/CIKM'24-brightgreen" /></a>
-</p>
-
-The official source code for [**Vision Language Model is NOT All You Need: Augmentation Strategies for Molecule Language Model**](https://arxiv.org/abs/2407.09043), accepted at CIKM 2024.
+# Structural Similarity-Guided Contrastive Curriculum Learning for Molecule–Text Alignment
 
 
-## Overview
-Recently, there has been a growing interest among researchers in understanding molecules and their textual descriptions through molecule language models (MoLM). However, despite some early promising developments, the advancement of MoLM still trails significantly behind that of vision language models (VLM). This is because unique challenges exist apart from VLM in the field of MoLM due to 1) a limited amount of molecule-text paired data and 2) missing expertise that occurred due to the specialized areas of focus among the experts. To this end, we propose AMOLE, which 1) augments molecule-text pairs with structural similarity preserving loss, and 2) transfers the expertise between the molecules. Specifically, AMOLE enriches molecule-text pairs by sharing descriptions among structurally similar molecules with a novel structural similarity preserving loss. Moreover, we propose an expertise reconstruction loss to transfer knowledge from molecules that have extensive expertise to those with less expertise. Extensive experiments on various downstream tasks, including two novel tasks named zero-shot question and answering task and zero-shot virtual screening task, demonstrate the superiority of AMOLE in a more intricate understanding of molecules and their descriptions, and highlight potential applicability in real-world drug discovery.
+This project starts from
+[AMOLE](https://github.com/Namkyeong/AMOLE), which aligns molecular graphs and
+biomedical text through structure-aware contrastive learning and expertise
+transfer. The central question of this repository is:
 
-<img src="assets/Model.png" width="50%"></img> 
+> Can an easy-to-hard curriculum provide more reliable structural supervision
+> than uniformly sampling from a fixed top-*k* molecular neighborhood?
 
-**Overall model architecture.**
+The reproduction compares the original uniform top-50 policy with two
+alternatives: fixed similarity-stratified sampling and an epoch-dependent
+curriculum that gradually expands from highly similar to less similar
+molecules.
 
-## Environment
-We conduct enviroments with the following packages
+
+## Background: AMOLE
+
+Molecule–text pretraining is constrained by two recurring problems:
+
+1. high-quality molecule–description pairs are limited; and
+2. different textual descriptions contain uneven or incomplete domain
+   knowledge.
+
+AMOLE addresses them with two complementary objectives.
+![alt text](images/image-3.png)
+
+### Molecule–text pair augmentation
+
+For an original molecule–text pair $(G_i, t_i)$, AMOLE retrieves a top-*k*
+set of structurally similar molecules:
+
+$$
+\mathcal{S}_i = \operatorname{TopK}(G_i).
+$$
+
+With replacement probability $p_{\mathrm{aug}}$, a molecule $G_i'$ is sampled
+from $\mathcal{S}_i$ and paired with the original text $t_i$.
+The original AMOLE policy samples uniformly from a fixed top-*k* set.
+
+### Structural Similarity Preserving loss
+
+The Structural Similarity Preserving (S²P) loss uses Tanimoto similarity
+between molecular fingerprints as a soft contrastive target. Cross-modal
+embedding similarities are trained to follow this structural target in both
+text-to-molecule and molecule-to-text directions.
+
+Unlike one-hot contrastive supervision, S²P preserves graded relationships:
+closely related molecules receive stronger positive supervision, while less
+related molecules receive weaker supervision.
+
+### Expertise Reconstruction loss
+
+The Expertise Reconstruction (ER) loss transfers information between multiple
+descriptions associated with molecular expertise. Its contribution is
+controlled by $\alpha$:
+
+$$
+\mathcal{L}
+=
+\mathcal{L}_{\mathrm{S^2P}}
++
+\alpha \mathcal{L}_{\mathrm{ER}}.
+$$
+
+S²P primarily governs structural alignment and augmentation quality, whereas
+ER focuses on textual expertise transfer.
+
+
+## Motivation
+
+AMOLE assumes that uniform sampling from the top-*k* Tanimoto neighbors
+provides useful augmented positives. My own analysis showed that the actual
+neighborhood geometry can differ substantially across molecules.
+
+### 1. A fixed top-*k* set does not guarantee consistent positive quality
+
+Different molecules may have qualitatively different neighborhoods:
+
+![alt text](images/image.png)
+- **low-similarity neighborhoods:** even the nearest candidates may be weak
+  semantic positives.
+
+![alt text](images/image-1.png)
+- **near-duplicate neighborhoods:** extremely similar candidates provide
+  little structural diversity.
+
+![alt text](images/image-2.png)
+- **skewed or spiky neighborhoods:** a small number of highly informative
+  candidates coexist with many lower-similarity candidates.
+
+Consequently, the same value of *k* can represent very different levels of
+augmentation difficulty.
+
+### 2. Uniform sampling ignores rare but informative neighbors
+
+When lower-similarity molecules dominate a top-*k* set, uniform sampling can
+under-sample the few strong positives. This weakens the structural signal used
+to construct the S²P soft labels.
+
+### 3. Augmentation difficulty should change during training
+
+Early optimization benefits from clear positive signals. Introducing ambiguous
+or weakly related molecules too early can make the structural target noisy
+before the molecule and text encoders have formed a stable shared space.
+
+This motivates an easy-to-hard curriculum:
+
+1. begin with the highest-ranked structural neighbors;
+2. establish reliable molecule–text alignment; and
+3. gradually introduce more diverse and difficult positives.
+
+
+## Sampling Strategies
+
+All strategies use Tanimoto-ranked molecular neighbors and the same replacement
+probability $p_{\mathrm{aug}}=0.5$. They differ only in how an augmentation
+candidate is selected.
+
+| Strategy | Candidate policy | Main intuition |
+| --- | --- | :---: | --- |
+| Baseline | Uniform sampling from ranks 1–50 | Reproduce the fixed AMOLE top-*k* policy |
+| Stratified | Select high/mid/low rank groups with fixed probabilities | Preserve access to multiple similarity levels |
+| Curriculum | Uniform sampling from a progressively expanding prefix | Learn from strong positives before harder positives |
+
+### Baseline: fixed uniform top-50 sampling
+
+The baseline always samples uniformly from the 50 highest-ranked Tanimoto
+neighbors:
+
+$$
+G_i' \sim \operatorname{Uniform}
+\left(\mathcal{S}_i^{1:50}\right).
+$$
+
+This is simple and diverse, but it treats every rank as equally appropriate at
+every stage of training.
+
+### Stratified sampling
+
+![alt text](images/image-4.png)
+
+The fixed stratified policy partitions the top-50 ranking into three groups.
+
+| Group | Neighbor ranks | Group probability |
+| --- | ---: | ---: |
+| High similarity | 1–10 | 0.50 |
+| Mid similarity | 11–40 | 0.35 |
+| Low similarity | 41–50 | 0.15 |
+
+After selecting a group, the method samples uniformly among candidates whose
+Tanimoto similarity is at least `0.25`. If the selected group has no eligible
+candidate, augmentation is cancelled and the original molecule is retained.
+
+The strategy gives high-similarity candidates more probability while retaining
+controlled exposure to structurally diverse candidates.
+
+### Curriculum sampling
+
+![alt text](images/image-5.png)
+
+The curriculum controls the size of the active candidate prefix $K(e)$ at
+epoch $e$:
+
+$$
+K(e)=
+\begin{cases}
+10, & 1 \le e \le 5,\\
+10 + 4(e-5), & 6 \le e \le 15,\\
+50, & 16 \le e \le 20.
+\end{cases}
+$$
+
+At each epoch, the augmented molecule is sampled uniformly from ranks
+$1,\ldots,K(e)$.
+
+- **Epochs 1–5:** use only the top-10 neighbors to emphasize strong positives.
+- **Epochs 6–15:** add four lower-ranked candidates per epoch.
+- **Epochs 16–20:** use the full top-50 set after the shared space has
+  stabilized.
+
+The curriculum changes augmentation difficulty without changing the S²P
+objective, replacement probability, or final candidate set.
+
+
+## Reproduction Design
+
+### Dataset
+
+The original AMOLE pretraining setup used approximately 299K unique molecules
+and 336K molecule–text pairs. This reproduction uses a curated PubChem324kV2
+subset:
+
+| Dataset property | Reproduction setting |
+| --- | ---: |
+| Unique molecules | 50,000 |
+| Molecule–text pairs | approximately 67.3K |
+| Multiple descriptions per molecule | Preserved |
+| Structural ranking | Morgan fingerprint Tanimoto similarity |
+| Saved neighbors | Exact self-excluded top-100 |
+
+The changed data distribution is intentional: it provides a smaller setting
+for examining whether AMOLE's augmentation mechanism remains robust when
+structural neighborhoods are heterogeneous.
+
+### Training configuration
+
+| Hyperparameter | Value |
+| --- | ---: |
+| Training epochs | 20 |
+| Text encoder learning rate | `1e-5` |
+| Molecule encoder learning rate | `1e-5` |
+| S²P target temperature | `0.1` |
+| Model prediction temperature | `0.1` |
+| Maximum number of candidates | 50 |
+| Replacement probability | `0.5` |
+| ER-loss weight $\alpha$ | `1.0`, `2.0` |
+| Global batch size | 30 |
+| Maximum text sequence length | 512 |
+
+
+## Evaluation and Findings
+
+### Zero-shot cross-modal retrieval
+
+Each checkpoint is evaluated on three DrugBank retrieval benchmarks:
+
+- **Description**
+- **Pharmacodynamics**
+- **ATC**
+
+Evaluation is bidirectional:
+
+- **Given Molecule:** retrieve the corresponding text; and
+- **Given Text:** retrieve the corresponding molecule.
+
+Candidate-set sizes of 4, 10, and 20 are used. Reported values are five-trial
+mean accuracy with population standard deviation.
+
+### Main observations
+
+![alt text](images/image-6.png)
+![alt text](images/image-7.png)
+![alt text](images/image-8.png)
+
+1. **Curriculum sampling produced the clearest gains on Description and
+   Pharmacodynamics.** Beginning with high-similarity candidates and gradually
+   expanding the active set provided more stable structural supervision across
+   the @4, @10, and @20 settings.
+
+2. **The fixed stratified strategy produced limited overall gains.** Although
+   it maintained controlled access to high-, mid-, and low-similarity regions,
+   its fixed probabilities could not adapt augmentation difficulty as training
+   progressed.
+
+3. **S²P-oriented sampling and ER weighting affected different aspects of the
+   task.** The curriculum directly changed augmented pairs and S²P targets,
+   while increasing $\alpha$ had a stronger effect on the ATC benchmark,
+   consistent with ER's expertise-transfer role.
+
+4. **Structural diversity is useful after alignment becomes stable.** The
+   curriculum did not permanently discard lower-similarity candidates; it
+   delayed them until later epochs, when they could act as harder positives
+   rather than early noise.
+
+
+## Key Insights
+
+### Similarity rank is a training signal, not only a preprocessing choice
+
+The top-*k* ranking determines which structural relationships become positive
+supervision. Candidate selection therefore changes the learning problem even
+when the loss function remains unchanged.
+
+### More similar is not always better
+
+Near-duplicate molecules may add little diversity, while weakly similar
+molecules may not preserve the semantics of the original text. Effective
+augmentation requires a balance between positive reliability and structural
+coverage.
+
+### Fixed policies cannot fully capture molecule-specific uncertainty
+
+Top-50 neighborhoods vary from dense near-duplicate clusters to sparse or
+highly skewed distributions. A single rank range or fixed probability mixture
+cannot guarantee equal augmentation difficulty for every molecule.
+
+### Curriculum learning offers temporal control
+
+The curriculum uses similarity rank to schedule difficulty over time. It
+preserves the eventual diversity of top-50 augmentation while prioritizing
+high-confidence positives during the most sensitive early stage of training.
+
+### S²P and ER are complementary
+
+Curriculum sampling improves how structural positives are selected for S²P,
+whereas $\alpha$ controls the strength of textual expertise transfer through
+ER. Their effects should be analyzed separately rather than attributing every
+gain to a single objective.
+
+## Limitations
+
+1. **Batch-size sensitivity.** Contrastive learning depends on the number and
+   diversity of in-batch negatives. The reproduction uses global batch size 30,
+   which differs from the larger original AMOLE setting.
+
+2. **Changed data distribution.** The 50K PubChem324kV2 subset preserves
+   multiple descriptions but does not fully reproduce the scale or imbalance
+   of the original PubChem data.
+
+## Repository Structure
+
+```text
+.
+├── datasets/
+│   └── TanimotoSTM.py              # baseline, stratified, and curriculum sampling
+├── models/
+│   └── AMOLE.py                    # S²P and ER training loop
+├── scripts/
+│   ├── prepare_pubchem324kv2.py    # curated 50K subset construction
+│   ├── finalize_amole50k.py        # AMOLE-compatible graph artifacts
+│   ├── compute_tanimoto_topk.py    # exact top-k structural neighbors
+│   └── evaluate_retrieval_reproduction.py
+├── sh/
+│   ├── pretrain_baseline_ddp_3gpu.sh
+│   ├── pretrain_stratified_ddp_3gpu.sh
+│   └── pretrain_curriculum_ddp_3gpu.sh
+├── results/
+│   ├── retrieval/                  # final retrieval tables
+│   ├── sampling/                   # sampling-policy diagrams
+│   └── tanimoto/                   # final similarity-analysis figures
+└── docs/
+    ├── data_preparation.md
+    └── reproduction.md
 ```
-Python version: 3.7.16
 
-rdkit version: 2020.09.1.0
-Pytorch version: 1.10.1
-Torch Geometric version: 2.0.3
-PyTDC version: 0.4.1
+Generated datasets, checkpoints, logs, and raw evaluation outputs are excluded
+from version control.
 
-# For SciBERT
-boto3 version: 1.7.62
-transformers version: 4.30.2
+## Getting Started
+
+### 1. Create the environments
+
+The repository separates data preparation from the legacy-compatible AMOLE
+training environment.
+
+```bash
+micromamba create -y -f environment-data.yml -p /path/to/amole-data
+micromamba create -y -f environment-train-titan.yml -p /path/to/amole-train
 ```
 
-We provide whole conda environment used during the experiments in ``AMOLE.yml``.
+See [docs/data_preparation.md](docs/data_preparation.md) for the complete data
+pipeline.
 
-## Pre-training AMOLE
+### 2. Prepare the PubChem324kV2 subset
 
-### Dataset Preparation
-Please follow the instruction for preprocessing step of [previous work](https://github.com/chao1224/MoleculeSTM/tree/main?tab=readme-ov-file#2-datasets-and-preprocessing) for extracting the data from PubChem database.
-
-After preparing the data, please put the data into `./data/PubChemSTM/raw/` directory.
-The output structure should be like this:
-```
-data/
-├── PubChemSTM
-    └── raw
-        └── CID2name_raw.json
-        └── CID2name.json
-        └── CID2text_raw.json
-        └── CID2text.json
-        └── CID2SMILES.csv
-        └── molecules.sdf
+```bash
+bash scripts/download_pubchem324kv2.sh
+micromamba run -p /path/to/amole-data python scripts/prepare_pubchem324kv2.py
+micromamba run -p /path/to/amole-data \
+  python scripts/validate_pubchem324kv2.py --validate-sdf
 ```
 
-By running `TanimotoSTM.py` code, it will automatically further preprocess the datasets provided in the `./data/PubChemSTM/raw/` directory.
+Finalize the training package and compute molecular neighbors:
 
-After running the code, you should run `create_same_CID.py` and `create_similarities_CID.py`.
-
-`create_similarities_CID.py` will create the dictionary containing the CID and corresponding structurally similalar molecules' CIDs.
-
-`create_same_CID.py` will create text list of same CID.
-
-
-### Initial Checkpoints
-
-Following MoleculeSTM, we initialize the language model (LM) and graph neural network (GNN) with pretrained checkpoints.
-
-For **LM**, we use the SciBERT checkpoints provided by the original authors in [huggingface repository](https://huggingface.co/allenai/scibert_scivocab_uncased).
-This can be easily done by using the following code:
-
-```
-text_tokenizer = AutoTokenizer.from_pretrained('allenai/scibert_scivocab_uncased', cache_dir=pretrained_SciBERT_folder)
-text_model = AutoModel.from_pretrained('allenai/scibert_scivocab_uncased', cache_dir=pretrained_SciBERT_folder).to(device)
+```bash
+micromamba run -p /path/to/amole-train python scripts/finalize_amole50k.py
+micromamba run -p /path/to/amole-train python scripts/validate_amole50k.py
+micromamba run -p /path/to/amole-train \
+  python scripts/compute_tanimoto_topk.py --gpus 0,1,2,3 --k 100
 ```
 
-For **GNN**, we use the GraphMVP checkpoints provided by the original authors in [Google drive link](https://drive.google.com/drive/u/1/folders/1uPsBiQF3bfeCAXSDd4JfyXiTh-qxYfu6).
-After downloading the checkpoints, please put the downloaded checkpoint into `./data/PubChemSTM/pretrained_GraphMVP` directory.
+### 3. Train the variants
 
-### Start pretraining
-To run the code, you have two options:
+Each distributed script expects exactly three GPU IDs.
 
-**[Option 1]** Train model with shell script
-```
-sh ./sh/pretrain.sh
-```
+```bash
+ENV_PREFIX=/path/to/amole-train GPU_IDS=0,1,2 \
+  ./sh/pretrain_baseline_ddp_3gpu.sh
 
-**[Option 2]** Train model without shell script
-```
-python pretrain.py
-```
+ENV_PREFIX=/path/to/amole-train GPU_IDS=0,1,2 \
+  ./sh/pretrain_stratified_ddp_3gpu.sh
 
-Following hyperparameters can be passed into `pretrain.py`:
-
-``target_T``: Temperature hyperparameter for pseudo label ($\tau_1$ in eq. 3).
-
-``T``: Temperature hyperparameter for model prediction ($\tau_2$ eq. 4).
-
-``p_aug``: Augmentation probability $p$. Given the probability, we randomly substitute original molecule $\mathcal{G}_{i}$ to the molecule in $\mathcal{S}_{i}$.
-
-``num_cand``: Number of pre-defined structurally similar molecules $k$.
-
-``alpha``: Hyperparameter for controlling the weight of the expertise reconstruction ($ER$) loss $\alpha$.
-
-
-
-## Downstream Tasks
-
-After pretraining step, the python code will automatically save the checkpoints in `./model_checkpoints/`. With the saved checkpoints, you can perform various downstream tasks.
-
-## Zero-Shot Cross-Modal Retrieval
-
-### Dataset Preparation
-For zero-shot cross-modal retrieval task, we use the preprocessed dataset provided by the MoleculeSTM authors' [huggingface repository](https://huggingface.co/datasets/chao1224/MoleculeSTM).
-
-For Description dataset, we use `MoleculeSTM/DrugBank_data/SMILES_description_removed_from_PubChem_full.txt`.
-
-For Pharmacodynamics dataset, we use `MoleculeSTM/DrugBank_data/SMILES_pharmacodynamics_removed_from_PubChem_full.txt`.
-
-For ATC dataset, we use `MoleculeSTM/DrugBank_data/SMILES_ATC_5_full.txt`.
-
-After downloading the datasets, please put the txt files into `./data/Drugbank/raw` directory.
-
-### Evaluate the model performance
-You can evaluate the model performance with following codes:
-```
-# If you are using shell scripts
-sh evaluate_retrieval.sh
-
-# If you are not using shell scripts
-python evaluate_retrieval.py
+ENV_PREFIX=/path/to/amole-train GPU_IDS=0,1,2 \
+  ./sh/pretrain_curriculum_ddp_3gpu.sh
 ```
 
-Following hyperparameters can be passed into `evaluate_retrieval.py`:
+Set `ALPHA=2.0` to train the corresponding alpha-2 variant.
 
-``input_model_config``: Name of pretrained checkpoint.
+### 4. Evaluate retrieval
 
-``dataset``: Which dataset to evaluate. You can choose among the `description`, `pharmacodynamics`, `ATC`.
-
-``test_mode``: You have two test modes for this task. First, given a molecule retrieve the most relevant description `given_molecule` . Second, given a description, retrieve the most relevant molecule `given_text`. 
-
-
-## Zero-Shot Question and Answering
-
-### Dataset Preparation
-We generate questions based on the textual descriptions used for the cross-modal retrieval task.
-Specifically, we employ GPT-4 to craft a multiple choice question with five options, each based on the textual descriptions of molecules.
-Further details on generating QA dataset is provided in Appendix C.2.
-
-### Evaluate the model performance
-You can evaluate the model performance with following codes:
-```
-# If you are using shell scripts
-sh evaluate_QA.sh
-
-# If you are not using shell scripts
-python evaluate_QA.py
+```bash
+python scripts/evaluate_retrieval_reproduction.py --help
 ```
 
-Following hyperparameters can be passed into `evaluate_QA.py`:
+Detailed settings are summarized in
+[docs/reproduction.md](docs/reproduction.md).
 
-``input_model_config``: Name of pretrained checkpoint.
+## Acknowledgements
 
-``dataset``: Which QA dataset to evaluate. You can choose among the `description`, `pharmacodynamics`. 
+This project is based on the official implementation of:
 
+- [Vision Language Model is NOT All You Need: Augmentation Strategies for
+  Molecule Language Model](https://arxiv.org/abs/2407.09043)
+  (AMOLE, CIKM 2024)
+- [Official AMOLE repository](https://github.com/Namkyeong/AMOLE)
+- [MoleculeSTM](https://github.com/chao1224/MoleculeSTM)
 
-## Molecular Property Prediction
-
-### Dataset Preparation
-For molecular property prediction task, we use the preprocessed dataset provided by the MoleculeSTM authors' [huggingface repository](https://huggingface.co/datasets/chao1224/MoleculeSTM).
-
-After downloading the datasets in `MoleculeNet_data`, please put the txt files into `./data/MoleculeNet_data` directory. 
-The directory may be like the followings:
-```
-data/
-├── MoleculeNet_data
-    └── bace
-    └── bbbp
-    └── clintox
-    └── hiv
-    └── muv
-    └── sider
-    └── tox21
-    └── toxcast
-```
-
-### Evaluate the model performance
-You can evaluate the model performance with following codes:
-```
-# If you are using shell scripts
-sh evaluate_mpp.sh
-
-# If you are not using shell scripts
-python evaluate_mpp.py
-```
-
-Following hyperparameters can be passed into `evaluate_mpp.py`:
-
-``input_model_config``: Name of pretrained checkpoint.
-
-``dataset``: Which dataset to evaluate. You can choose among the `bace`, `bbbp`, `clintox`, `hiv`, `muv`, `sider`, `tox21`, `toxcast`. 
-
-
-## Zero-Shot Virtual Screening
-
-### Dataset Preparation
-For zero-shot virtual screening task, we mainly use the datasets provided in [Therapeutics Data Commons](https://tdcommons.ai/).
-The dataset will be easily downloaded by running the following codes:
-
-```
-dataset = TDC_Datasets_Graph(args.dataspace_path, args.dataset)
-```
-
-On the other hand, for VDR dataset, we use the dataset provided by [LIT-PCBA](https://drugdesign.unistra.fr/LIT-PCBA/).
-To use the dataset, please download the dataset from the site and put the downloaded csv file into `./data/TDC/VDR/raw/` directory.
-
-Note that we sample a subset of 10,000 drugs from the inactive category for analysis, i.e., a total of 10,655 drugs, in VDR dataset due to the significant imbalance between active and inactive drugs.
-
-
-### Evaluate the model performance
-You can evaluate the model performance with following codes:
-```
-# If you are using shell scripts
-bash evaluate_vs.sh
-
-# If you are not using shell scripts
-python evaluate_vs.py
-```
-
-Following hyperparameters can be passed into `evaluate_vs.py`:
-
-``input_model_config``: Name of pretrained checkpoint.
-
-``dataset``: Which dataset to evaluate. You can choose among the `HIA`, `Pgp_Inhibition`, `DILI`, `VDR`, `Bioavailability`, `BBB`, `hERG`, `HIV`. 
-
-``prompt``: Textual prompt for virtual screening.
-
-``topk``: Number of screened molecules.
+The curriculum and stratified sampling experiments in this repository are
+reproduction-oriented extensions built on top of AMOLE's molecule–text
+augmentation framework.
