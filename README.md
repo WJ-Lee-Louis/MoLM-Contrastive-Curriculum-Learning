@@ -15,6 +15,7 @@ curriculum that gradually expands from highly similar to less similar
 molecules.
 
 
+
 ## Background: AMOLE
 
 Molecule–text pretraining is constrained by two recurring problems:
@@ -28,15 +29,19 @@ AMOLE addresses them with two complementary objectives.
 
 ### Molecule–text pair augmentation
 
-For an original molecule–text pair `(G_i, t_i)`, AMOLE retrieves a top-*k*
-set of structurally similar molecules:
+For an original molecule–text pair $(G_i, t_i)$, AMOLE retrieves a top-*k*
+set of structurally similar molecules. Let $\mathcal{S}_i$ denote the ordered
+candidate set:
 
-```text
-S_i = TopK(G_i)
+```math
+\mathcal{S}_i = \{G_{i,1}, G_{i,2}, \ldots, G_{i,k}\},
+\qquad
+s(G_i,G_{i,1}) \ge \cdots \ge s(G_i,G_{i,k}),
 ```
 
-With replacement probability `p_aug`, a molecule `G_i'` is sampled from `S_i`
-and paired with the original text `t_i`.
+where $s(\cdot,\cdot)$ is Morgan-fingerprint Tanimoto similarity. With
+replacement probability $p_{\mathrm{aug}}$, a molecule $G_i'$ is sampled from
+$\mathcal{S}_i$ and paired with the original text $t_i$.
 The original AMOLE policy samples uniformly from a fixed top-*k* set.
 
 ### Structural Similarity Preserving loss
@@ -54,14 +59,19 @@ related molecules receive weaker supervision.
 
 The Expertise Reconstruction (ER) loss transfers information between multiple
 descriptions associated with molecular expertise. Its contribution is
-controlled by `α`:
+controlled by $\alpha$:
 
-```text
-L = L_S²P + α · L_ER
+```math
+\mathcal{L}
+=
+\mathcal{L}_{S^2P}
++
+\alpha \mathcal{L}_{ER}.
 ```
 
 S²P primarily governs structural alignment and augmentation quality, whereas
 ER focuses on textual expertise transfer.
+
 
 
 ## Motivation
@@ -108,14 +118,15 @@ This motivates an easy-to-hard curriculum:
 3. gradually introduce more diverse and difficult positives.
 
 
+
 ## Sampling Strategies
 
 All strategies use Tanimoto-ranked molecular neighbors and the same replacement
-probability `p_aug = 0.5`. They differ only in how an augmentation
+probability $p_{\mathrm{aug}}=0.5$. They differ only in how an augmentation
 candidate is selected.
 
 | Strategy | Candidate policy | Main intuition |
-| --- | --- | :---: | --- |
+| --- | --- | --- |
 | Baseline | Uniform sampling from ranks 1–50 | Reproduce the fixed AMOLE top-*k* policy |
 | Stratified | Select high/mid/low rank groups with fixed probabilities | Preserve access to multiple similarity levels |
 | Curriculum | Uniform sampling from a progressively expanding prefix | Learn from strong positives before harder positives |
@@ -125,12 +136,13 @@ candidate is selected.
 The baseline always samples uniformly from the 50 highest-ranked Tanimoto
 neighbors:
 
-```text
-G_i' ~ Uniform(S_i[1:50])
+```math
+G_i' \sim \mathcal{U}\!\left(\mathcal{S}_i^{1:50}\right).
 ```
 
 This is simple and diverse, but it treats every rank as equally appropriate at
-every stage of training.
+every stage of training. Here, $\mathcal{U}$ denotes uniform sampling and
+$\mathcal{S}_i^{1:50}$ denotes the first 50 ranked candidates.
 
 ### Stratified sampling
 
@@ -155,17 +167,20 @@ controlled exposure to structurally diverse candidates.
 
 ![alt text](images/image-5.png)
 
-The curriculum controls the size of the active candidate prefix `K(e)` at
-epoch `e`:
+The curriculum controls the size of the active candidate prefix $K(e)$ at
+epoch $e$:
 
-```text
-K(e) = 10                 for epochs 1–5
-       10 + 4(e - 5)      for epochs 6–15
-       50                 for epochs 16–20
+```math
+K(e)=
+\begin{cases}
+10, & 1 \le e \le 5, \\
+10 + 4(e-5), & 6 \le e \le 15, \\
+50, & 16 \le e \le 20.
+\end{cases}
 ```
 
 At each epoch, the augmented molecule is sampled uniformly from ranks
-`1, ..., K(e)`.
+$1,\ldots,K(e)$.
 
 - **Epochs 1–5:** use only the top-10 neighbors to emphasize strong positives.
 - **Epochs 6–15:** add four lower-ranked candidates per epoch.
@@ -176,25 +191,22 @@ The curriculum changes augmentation difficulty without changing the S²P
 objective, replacement probability, or final candidate set.
 
 
-## Reproduction Design
+
+## Experimental Design
 
 ### Dataset
 
-The original AMOLE pretraining setup used approximately 299K unique molecules
-and 336K molecule–text pairs. This reproduction uses a curated PubChem324kV2
+The original AMOLE pretraining setup used approximately 299K unique molecules and 336K molecule–text pairs. This reproduction uses a curated PubChem324kV2
 subset:
 
 | Dataset property | Reproduction setting |
 | --- | ---: |
-| Unique molecules | 50,000 |
+| Unique molecules | 50K |
 | Molecule–text pairs | approximately 67.3K |
 | Multiple descriptions per molecule | Preserved |
 | Structural ranking | Morgan fingerprint Tanimoto similarity |
 | Saved neighbors | Exact self-excluded top-100 |
 
-The changed data distribution is intentional: it provides a smaller setting
-for examining whether AMOLE's augmentation mechanism remains robust when
-structural neighborhoods are heterogeneous.
 
 ### Training configuration
 
@@ -207,9 +219,10 @@ structural neighborhoods are heterogeneous.
 | Model prediction temperature | `0.1` |
 | Maximum number of candidates | 50 |
 | Replacement probability | `0.5` |
-| ER-loss weight `α` | `1.0`, `2.0` |
+| ER-loss weight $\alpha$ | `1.0`, `2.0` |
 | Global batch size | 30 |
 | Maximum text sequence length | 512 |
+
 
 
 ## Evaluation and Findings
@@ -248,7 +261,7 @@ mean accuracy with population standard deviation.
 
 3. **S²P-oriented sampling and ER weighting affected different aspects of the
    task.** The curriculum directly changed augmented pairs and S²P targets,
-   while increasing `α` had a stronger effect on the ATC benchmark,
+   while increasing $\alpha$ had a stronger effect on the ATC benchmark,
    consistent with ER's expertise-transfer role.
 
 4. **Structural diversity is useful after alignment becomes stable.** The
@@ -257,39 +270,6 @@ mean accuracy with population standard deviation.
    rather than early noise.
 
 
-## Key Insights
-
-### Similarity rank is a training signal, not only a preprocessing choice
-
-The top-*k* ranking determines which structural relationships become positive
-supervision. Candidate selection therefore changes the learning problem even
-when the loss function remains unchanged.
-
-### More similar is not always better
-
-Near-duplicate molecules may add little diversity, while weakly similar
-molecules may not preserve the semantics of the original text. Effective
-augmentation requires a balance between positive reliability and structural
-coverage.
-
-### Fixed policies cannot fully capture molecule-specific uncertainty
-
-Top-50 neighborhoods vary from dense near-duplicate clusters to sparse or
-highly skewed distributions. A single rank range or fixed probability mixture
-cannot guarantee equal augmentation difficulty for every molecule.
-
-### Curriculum learning offers temporal control
-
-The curriculum uses similarity rank to schedule difficulty over time. It
-preserves the eventual diversity of top-50 augmentation while prioritizing
-high-confidence positives during the most sensitive early stage of training.
-
-### S²P and ER are complementary
-
-Curriculum sampling improves how structural positives are selected for S²P,
-whereas `α` controls the strength of textual expertise transfer through
-ER. Their effects should be analyzed separately rather than attributing every
-gain to a single objective.
 
 ## Limitations
 
@@ -300,6 +280,7 @@ gain to a single objective.
 2. **Changed data distribution.** The 50K PubChem324kV2 subset preserves
    multiple descriptions but does not fully reproduce the scale or imbalance
    of the original PubChem data.
+
 
 ## Repository Structure
 
@@ -329,6 +310,8 @@ gain to a single objective.
 
 Generated datasets, checkpoints, logs, and raw evaluation outputs are excluded
 from version control.
+
+
 
 ## Getting Started
 
@@ -388,6 +371,8 @@ python scripts/evaluate_retrieval_reproduction.py --help
 
 Detailed settings are summarized in
 [docs/reproduction.md](docs/reproduction.md).
+
+
 
 ## Acknowledgements
 
