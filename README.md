@@ -28,15 +28,15 @@ AMOLE addresses them with two complementary objectives.
 
 ### Molecule–text pair augmentation
 
-For an original molecule–text pair $(G_i, t_i)$, AMOLE retrieves a top-*k*
+For an original molecule–text pair `(G_i, t_i)`, AMOLE retrieves a top-*k*
 set of structurally similar molecules:
 
-$$
-\mathcal{S}_i = \operatorname{TopK}(G_i).
-$$
+```text
+S_i = TopK(G_i)
+```
 
-With replacement probability $p_{\mathrm{aug}}$, a molecule $G_i'$ is sampled
-from $\mathcal{S}_i$ and paired with the original text $t_i$.
+With replacement probability `p_aug`, a molecule `G_i'` is sampled from `S_i`
+and paired with the original text `t_i`.
 The original AMOLE policy samples uniformly from a fixed top-*k* set.
 
 ### Structural Similarity Preserving loss
@@ -54,15 +54,11 @@ related molecules receive weaker supervision.
 
 The Expertise Reconstruction (ER) loss transfers information between multiple
 descriptions associated with molecular expertise. Its contribution is
-controlled by $\alpha$:
+controlled by `α`:
 
-$$
-\mathcal{L}
-=
-\mathcal{L}_{\mathrm{S^2P}}
-+
-\alpha \mathcal{L}_{\mathrm{ER}}.
-$$
+```text
+L = L_S²P + α · L_ER
+```
 
 S²P primarily governs structural alignment and augmentation quality, whereas
 ER focuses on textual expertise transfer.
@@ -115,7 +111,7 @@ This motivates an easy-to-hard curriculum:
 ## Sampling Strategies
 
 All strategies use Tanimoto-ranked molecular neighbors and the same replacement
-probability $p_{\mathrm{aug}}=0.5$. They differ only in how an augmentation
+probability `p_aug = 0.5`. They differ only in how an augmentation
 candidate is selected.
 
 | Strategy | Candidate policy | Main intuition |
@@ -129,10 +125,9 @@ candidate is selected.
 The baseline always samples uniformly from the 50 highest-ranked Tanimoto
 neighbors:
 
-$$
-G_i' \sim \operatorname{Uniform}
-\left(\mathcal{S}_i^{1:50}\right).
-$$
+```text
+G_i' ~ Uniform(S_i[1:50])
+```
 
 This is simple and diverse, but it treats every rank as equally appropriate at
 every stage of training.
@@ -160,20 +155,17 @@ controlled exposure to structurally diverse candidates.
 
 ![alt text](images/image-5.png)
 
-The curriculum controls the size of the active candidate prefix $K(e)$ at
-epoch $e$:
+The curriculum controls the size of the active candidate prefix `K(e)` at
+epoch `e`:
 
-$$
-K(e)=
-\begin{cases}
-10, & 1 \le e \le 5,\\
-10 + 4(e-5), & 6 \le e \le 15,\\
-50, & 16 \le e \le 20.
-\end{cases}
-$$
+```text
+K(e) = 10                 for epochs 1–5
+       10 + 4(e - 5)      for epochs 6–15
+       50                 for epochs 16–20
+```
 
 At each epoch, the augmented molecule is sampled uniformly from ranks
-$1,\ldots,K(e)$.
+`1, ..., K(e)`.
 
 - **Epochs 1–5:** use only the top-10 neighbors to emphasize strong positives.
 - **Epochs 6–15:** add four lower-ranked candidates per epoch.
@@ -215,7 +207,7 @@ structural neighborhoods are heterogeneous.
 | Model prediction temperature | `0.1` |
 | Maximum number of candidates | 50 |
 | Replacement probability | `0.5` |
-| ER-loss weight $\alpha$ | `1.0`, `2.0` |
+| ER-loss weight `α` | `1.0`, `2.0` |
 | Global batch size | 30 |
 | Maximum text sequence length | 512 |
 
@@ -256,7 +248,7 @@ mean accuracy with population standard deviation.
 
 3. **S²P-oriented sampling and ER weighting affected different aspects of the
    task.** The curriculum directly changed augmented pairs and S²P targets,
-   while increasing $\alpha$ had a stronger effect on the ATC benchmark,
+   while increasing `α` had a stronger effect on the ATC benchmark,
    consistent with ER's expertise-transfer role.
 
 4. **Structural diversity is useful after alignment becomes stable.** The
@@ -295,7 +287,7 @@ high-confidence positives during the most sensitive early stage of training.
 ### S²P and ER are complementary
 
 Curriculum sampling improves how structural positives are selected for S²P,
-whereas $\alpha$ controls the strength of textual expertise transfer through
+whereas `α` controls the strength of textual expertise transfer through
 ER. Their effects should be analyzed separately rather than attributing every
 gain to a single objective.
 
